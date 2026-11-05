@@ -1,15 +1,17 @@
+# VERSION 2 du 04/11/2026 (ajout le vendredi)
 name: Synchro SIFAM (stock + prix)
 
 on:
   schedule:
     - cron: '4,34 * * * *'   # passage rapide toutes les 30 min, jour et nuit
     - cron: '7 8 * * *'      # passage complet chaque nuit (4 h 07 en Guadeloupe)
+    - cron: '37 9 * * 5'     # ajout des articles de nouveau en stock, chaque vendredi (5 h 37 en Guadeloupe)
   workflow_dispatch:
     inputs:
       mode:
         description: 'Type de passage'
         type: choice
-        options: [rapide, complet]
+        options: [rapide, complet, ajout]
         default: complet
       simulation:
         description: 'Simulation (ne rien écrire sur le site, rapport seulement)'
@@ -23,7 +25,7 @@ concurrency:
 jobs:
   synchro:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +50,11 @@ jobs:
         run: |
           MODE="${{ github.event.inputs.mode }}"
           if [ -z "$MODE" ]; then
-            if [ "${{ github.event.schedule }}" = "7 8 * * *" ]; then MODE=complet; else MODE=rapide; fi
+            case "${{ github.event.schedule }}" in
+              "7 8 * * *") MODE=complet ;;
+              "37 9 * * 5") MODE=ajout ;;
+              *) MODE=rapide ;;
+            esac
           fi
           python sync_sifam.py "$MODE"
 
