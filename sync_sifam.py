@@ -1,4 +1,4 @@
-# VERSION 2 du 04/11/2026 : ajout hebdomadaire des articles de nouveau en stock + produits archivés ignorés
+# VERSION 3 du 04/11/2026 (correctif stock @idempotent) : ajout hebdomadaire en brouillon (validation manuelle, tag a-valider) + produits archivés ignorés
 """Synchro SIFAM -> MotoWeb97 (Shopify) : stock + prix, toutes les 30 minutes (GitHub Actions).
 
 Règles (décisions Florent) :
@@ -24,7 +24,7 @@ Trois modes :
 Sécurités : moins de 1 000 articles renvoyés par SIFAM -> arrêt sans rien écrire ; baisse de prix de plus de 30 %
 en un passage -> non appliquée, signalée dans le rapport ; SIMULATION=1 -> n'écrit rien, rapport seulement.
 """
-import json, math, os, sys, time, urllib.request, urllib.parse, urllib.error
+import json, math, os, sys, time, uuid, urllib.request, urllib.parse, urllib.error
 
 API_VERSION = '2026-10'
 LOCATION = 'gid://shopify/Location/90504757388'        # Le Gosier
@@ -201,12 +201,13 @@ class Shopify:
         return out
 
     def ecrire_stocks(self, liste):
-        m = '''mutation($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) {
+        # API 2026-10 : la directive @idempotent est obligatoire sur les mutations de stock
+        m = '''mutation($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) @idempotent(key: "%s") {
                  userErrors { field message } } }'''
         erreurs = 0
         for i in range(0, len(liste), 250):
             paquet = [{'inventoryItemId': it, 'locationId': LOCATION, 'quantity': q, 'changeFromQuantity': None} for it, q in liste[i:i + 250]]
-            r = self.gql(m, {'input': {'name': 'available', 'reason': 'correction', 'quantities': paquet}})
+            r = self.gql(m % uuid.uuid4(), {'input': {'name': 'available', 'reason': 'correction', 'quantities': paquet}})
             ue = r['inventorySetQuantities']['userErrors']
             if ue:
                 erreurs += len(ue)
@@ -577,7 +578,7 @@ def fiche(a, ref, chemin, s, rows, moto_ids, urls):
     handle = re.sub(r'[^a-z0-9]+', '-', f"{souscat}-{marque}-{ref}".lower().translate(str.maketrans('éèêëàâäîïôöûüùç', 'eeeeaaaiioouuuc'))).strip('-')
     seo_desc = titre + (f", compatible {', '.join(marques_moto[:4])}" if marques_moto else '') + '. Prix tout compris livré en Guadeloupe.'
     inp = {'title': titre[:255], 'handle': handle, 'descriptionHtml': ''.join(h), 'vendor': marque, 'productType': souscat,
-           'status': 'DRAFT' if brouillon else 'ACTIVE', 'tags': tags,
+           'status': 'DRAFT', 'tags': tags + ['a-valider'],   # toujours en brouillon : validation par Florent (04/11/2026)
            'seo': {'title': titre[:70], 'description': seo_desc[:320]},
            'productOptions': [{'name': 'Title', 'values': [{'name': 'Default Title'}]}],
            'variants': [{'optionValues': [{'optionName': 'Title', 'name': 'Default Title'}], 'price': f"{prix:.2f}", 'sku': PREFIXE_SKU + ref,
@@ -649,7 +650,7 @@ def ajout():
         if raison:
             ecartes[raison] += 1
             continue
-        etiquette = f"- {PREFIXE_SKU}{ref} : {f['titre'][:80]} — {f['prix']:.2f} € ({f['souscat']}{', BROUILLON à vérifier' if f['brouillon'] else ''})"
+        etiquette = f"- {PREFIXE_SKU}{ref} : {f['titre'][:80]} — {f['prix']:.2f} € ({f['souscat']}{', à contrôler de près : pas de photo, freinage ou batterie' if f['brouillon'] else ''})"
         if not SIMULATION:
             try:
                 r = shop.gql(MUT_CREATION, {'i': f['input']})['productSet']
@@ -669,8 +670,8 @@ def ajout():
         brouillons += f['brouillon']
         lignes.append(etiquette)
     rapport.append('## Ajout hebdomadaire des articles SIFAM de nouveau en stock')
-    rapport.append(f"{len(candidats)} articles en stock chez SIFAM absents du site ; {crees} créé(s) dont {brouillons} en brouillon "
-                   f"(sans photo, freinage ou batteries : à vérifier), {erreurs} erreur(s), {round(time.time() - t0)} s."
+    rapport.append(f"{len(candidats)} articles en stock chez SIFAM absents du site ; {crees} créé(s) en brouillon (tag a-valider), "
+                   f"dont {brouillons} à contrôler de près (pas de photo, freinage ou batterie), {erreurs} erreur(s), {round(time.time() - t0)} s."
                    + (" **Simulation : rien n'a été créé.**" if SIMULATION else ''))
     if limite:
         rapport.append(f'Limite de {MAX_AJOUTS} ajouts atteinte : la suite sera ajoutée au prochain passage.')
