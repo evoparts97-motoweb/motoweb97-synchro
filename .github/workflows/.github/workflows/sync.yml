@@ -1,0 +1,60 @@
+name: Synchro SIFAM (stock + prix)
+
+on:
+  schedule:
+    - cron: '4,34 * * * *'   # passage rapide toutes les 30 min, jour et nuit
+    - cron: '7 8 * * *'      # passage complet chaque nuit (4 h 07 en Guadeloupe)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Type de passage'
+        type: choice
+        options: [rapide, complet]
+        default: complet
+      simulation:
+        description: 'Simulation (ne rien écrire sur le site, rapport seulement)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: synchro-sifam
+  cancel-in-progress: false
+
+jobs:
+  synchro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Mémoire du passage précédent
+        uses: actions/cache/restore@v4
+        with:
+          path: etat
+          key: etat-${{ github.run_id }}
+          restore-keys: etat-
+
+      - name: Synchro
+        env:
+          SIFAM_API_KEY: ${{ secrets.SIFAM_API_KEY }}
+          SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          SIMULATION: ${{ github.event.inputs.simulation == 'true' && '1' || '0' }}
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then
+            if [ "${{ github.event.schedule }}" = "7 8 * * *" ]; then MODE=complet; else MODE=rapide; fi
+          fi
+          python sync_sifam.py "$MODE"
+
+      - name: Enregistrer la mémoire
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: etat
+          key: etat-${{ github.run_id }}
